@@ -1,0 +1,8 @@
+1|Popcorn Caramel|52000
+2|Popcorn Salted|45000
+3|Sausage & Fries|40000
+4|Hot Dog|35000
+5|Soft Drinks|30000
+6|Milo|25000
+7|Ice Tea|20000
+8|Mineral Water|15000
