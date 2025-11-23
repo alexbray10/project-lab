@@ -1,4 +1,153 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <time.h>
+#include <conio.h>
+
+#define BARIS 9
+#define KOLOM 12
+#define FILM 100
+#define FNB 100
+#define USER 1000
+#define JAM 10
+
+typedef struct{
+    int id;
+    char title[1000];
+    char showTimes[100][100];
+    int showCount;
+    int price;
+} Movie;
+
+typedef struct{
+    int id;
+    char name[100];
+    int price;
+} MenuFNB;
+
+typedef struct{
+    char username[100];
+    char fullname[100];
+    char password[100];
+} User;
+
+void clearScreen(){
+    system("cls");
+}
+
+void clearInput(){
+    int a;
+    while ((a = getchar()) != '\n' && a != EOF) {}
+}
+
+void pauseScreen(){
+    printf("Press Enter to continue...");
+    clearInput();
+}
+
+User users[USER];
+int userCount = 0;
+
+void loadUsers(){
+    FILE *f = fopen("users.txt", "r");
+    if (!f) return;
+
+    userCount = 0;
+    while (fscanf(f, "%[^|]|%[^|]|%[^\n]\n", users[userCount].username, users[userCount].fullname, users[userCount].password) == 3) {
+        userCount++;
+    }
+    fclose(f); 
+}
+
+void saveUser(User acc){
+    FILE *f = fopen("users.txt", "a");
+    fprintf(f, "%s|%s|%s\n", acc.username, acc.fullname, acc.password);
+    fclose(f);
+}
+
+//register & login page
+void registerPage(){
+    clearScreen();
+    printf("=-=-= Register Account =-=-=\n");
+    User acc;
+    
+    printf("Full Name: ");
+    fgets(acc.fullname, sizeof(acc.fullname), stdin);
+    acc.fullname[strcspn(acc.fullname, "\n")] = 0; 
+
+    printf("Email (@gmail.com): ");
+    fgets(acc.username, sizeof(acc.username), stdin);
+    acc.username[strcspn(acc.username, "\n")] = 0; 
+
+    printf("Password: ");
+    fgets(acc.password, sizeof(acc.password), stdin);
+    acc.password[strcspn(acc.password, "\n")] = 0; 
+
+    saveUser(acc);
+    printf("\nAccount created successfully!\n");
+
+    pauseScreen();
+}
+
+int loginPage(){
+    clearScreen();
+    printf("=-=-= Login =-=-=\n");
+    char username[100], password[100];
+
+    printf("Username (@gmail.com): ");
+    fgets(username, sizeof(username), stdin);
+    username[strcspn(username, "\n")] = 0;
+
+    printf("Password: ");
+    fgets(password, sizeof(password), stdin);
+    password[strcspn(password, "\n")] = 0;
+
+    for (int i=0;i<userCount;i++){
+        if(strcmp(username, users[i].username) == 0 && strcmp(password, users[i].password) == 0){
+            printf("\nLogin Successful!\n");
+            pauseScreen();
+            return 1;
+        }
+    }
+
+    printf("\nInvalid username or password.\n");
+    pauseScreen();
+    return 0;
+}
+
+//bikin juga buat check @gmail.com nya, harus ada validation tiap input jangan sampe error
+//masking password pake *
+
 int main(){
-    printf(Hello World);
+//untuk sementara di main dulu, nanti dicoba pakai function
+    loadUsers();
+
+    while(1){
+        clearScreen();
+        printf("=-=-= Welcome to Cnema! =-=-=\n");
+        printf("1. Login\n");
+        printf("2. Register\n");
+        printf("3. Exit\n");
+
+        int n;
+        scanf("%d", &n);
+        clearInput();
+
+        if (n == 1){
+                if(loginPage()){
+                        break;
+                }
+        }
+        else if (n == 2){
+                registerPage();
+        }
+        else if (n == 3){
+                return 0;
+        }
+        else {
+                printf("Invalid.\n");
+                pauseScreen();
+        }
+        return 0;
 }
