@@ -158,90 +158,6 @@ void ensureAdminUser(void) {
     }
 }
 
-void registerPage(void) {
-    clearScreen();
-    printf("=-=-= Register Account =-=-=\n");
-    User acc;
-    char p1[100], p2[100];
-
-    while (1) {
-        printf("Full Name: ");
-        readLine(acc.fullname, sizeof(acc.fullname));
-        if (strlen(acc.fullname) == 0) {
-            printf("Full name cannot be empty.\n");
-            continue;
-        }
-        break;
-    }
-
-    while (1) {
-        printf("Email (@gmail.com): ");
-        readLine(acc.username, sizeof(acc.username));
-        if (!isValidEmail(acc.username)) {
-            printf("Email must end with @gmail.com and be valid.\n");
-            continue;
-        }
-        int exists = 0;
-        for (int i = 0; i < userCount; ++i) {
-            if (strcmp(acc.username, users[i].username) == 0) { exists = 1; break; }
-        }
-        if (exists) {
-            printf("Username already used. Try another.\n");
-            continue;
-        }
-        break;
-    }
-
-    while (1) {
-        printf("Password: ");
-        getPasswordMasked(p1, sizeof(p1));
-        printf("Confirm password: ");
-        getPasswordMasked(p2, sizeof(p2));
-        if (strcmp(p1, p2) != 0) {
-            printf("Passwords do not match. Try again.\n");
-            continue;
-        }
-        if (strlen(p1) == 0) {
-            printf("Password cannot be empty.\n");
-            continue;
-        }
-        strncpy(acc.password, p1, sizeof(acc.password) - 1);
-        acc.password[sizeof(acc.password) - 1] = '\0';
-        break;
-    }
-
-    saveUser(acc);
-    loadUsers();
-
-    printf("\nAccount created successfully!\n");
-    pauseScreen();
-}
-
-int loginPage(void) {
-    clearScreen();
-    printf("=-=-= Login =-=-=\n");
-    char username[100], password[100];
-
-    printf("Username (@gmail.com): ");
-    readLine(username, sizeof(username));
-
-    printf("Password: ");
-    getPasswordMasked(password, sizeof(password));
-
-    for (int i = 0; i < userCount; ++i) {
-        if (strcmp(username, users[i].username) == 0 && strcmp(password, users[i].password) == 0) {
-            printf("\nLogin Successful! Welcome, %s\n", users[i].fullname);
-            currentUser = i;
-            pauseScreen();
-            return 1;
-        }
-    }
-
-    printf("\nInvalid username or password.\n");
-    pauseScreen();
-    return 0;
-}
-
 void seatFilename(int movieId, int showIndex, char *out, size_t outsz) {
     if (!out || outsz == 0) return;
     snprintf(out, outsz, "seats_%d_%d.txt", movieId, showIndex);
@@ -396,13 +312,336 @@ int findMovieIndexById(int id) {
     return -1;
 }
 
+int selectMovieById(void) {
+    loadMovies();
+    if (movieCount == 0) {
+        printf("No movies available.\n");
+        pauseScreen();
+        return -1;
+    }
+    listMovies();
+    printf("\nEnter movie ID to book (0 to cancel): ");
+    int id;
+    if (scanf("%d", &id) != 1) { clearInput(); printf("Invalid input.\n"); pauseScreen(); return -1; }
+    clearInput();
+    if (id == 0) return -1;
+    int idx = findMovieIndexById(id);
+    if (idx == -1) {
+        printf("Movie with ID %d not found.\n", id);
+        pauseScreen();
+        return -1;
+    }
+    return idx;
+}
+
+int selectShowtimeForMovie(const Movie *m) {
+    if (!m) return -1;
+    if (m->showCount == 0) {
+        printf("No showtimes for this movie.\n");
+        pauseScreen();
+        return -1;
+    }
+    printf("Select showtime for '%s':\n", m->title);
+    for (int i = 0; i < m->showCount; ++i) {
+        printf("%d) %s\n", i + 1, m->showTimes[i]);
+    }
+    printf("Choose (1-%d, 0 cancel): ", m->showCount);
+    int choice;
+    if (scanf("%d", &choice) != 1) { clearInput(); printf("Invalid input.\n"); pauseScreen(); return -1; }
+    clearInput();
+    if (choice == 0) return -1;
+    if (choice < 1 || choice > m->showCount) {
+        printf("Invalid show selection.\n");
+        pauseScreen();
+        return -1;
+    }
+    return choice - 1;
+}
+
+int selectTicketQuantity(int available) {
+    if (available <= 0) {
+        printf("No seats available.\n");
+        pauseScreen();
+        return -1;
+    }
+    printf("How many tickets to buy? (available %d, 0 to cancel): ", available);
+    int qty;
+    if (scanf("%d", &qty) != 1) { clearInput(); printf("Invalid input.\n"); pauseScreen(); return -1; }
+    clearInput();
+    if (qty == 0) return -1;
+    if (qty < 1 || qty > available) {
+        printf("Invalid quantity (must be 1..%d)\n", available);
+        pauseScreen();
+        return -1;
+    }
+    return qty;
+}
+
+int parseSeatCode(const char *code, int *outRow, int *outCol) {
+    if (!code || strlen(code) < 2) return 0;
+    char c = toupper((unsigned char)code[0]);
+    if (c < 'A' || c >= 'A' + BARIS) return 0;
+    int row = c - 'A';
+    const char *p = code + 1;
+    if (!isdigit((unsigned char)*p)) return 0;
+    int col = atoi(p) - 1;
+    if (col < 0 || col >= KOLOM) return 0;
+    *outRow = row;
+    *outCol = col;
+    return 1;
+}
+
+int selectSeatsInteractive(const Movie *m, int showIndex, int qty, char chosenSeats[][8]) {
+    if (!m) return 0;
+    int seatsArr[BARIS][KOLOM];
+    ensureSeatFile(m->id, showIndex);
+    loadSeats(m->id, showIndex, seatsArr);
+
+    int avail = 0;
+    for (int r = 0; r < BARIS; ++r) for (int c = 0; c < KOLOM; ++c) if (seatsArr[r][c] == 0) avail++;
+    if (qty > avail) {
+        printf("Not enough seats available (%d left)\n", avail);
+        pauseScreen();
+        return 0;
+    }
+
+    int chosenCount = 0;
+    while (chosenCount < qty) {
+        clearScreen();
+        printf("Movie: %s | Showtime: %s\n", m->title, m->showTimes[showIndex]);
+        printf("Select seats (%d remaining):\n", qty - chosenCount);
+        displaySeatGrid(seatsArr);
+        printf("Enter seat code (e.g. B7) or 0 to cancel: ");
+        char input[32];
+        readLine(input, sizeof(input));
+        if (strcmp(input, "0") == 0) {
+            for (int i = 0; i < chosenCount; ++i) {
+                int rr = chosenSeats[i][0] - 'A';
+                int cc = atoi(chosenSeats[i] + 1) - 1;
+                if (rr >= 0 && rr < BARIS && cc >= 0 && cc < KOLOM) seatsArr[rr][cc] = 0;
+            }
+            printf("Seat selection cancelled.\n");
+            pauseScreen();
+            return 0;
+        }
+        int row, col;
+        if (!parseSeatCode(input, &row, &col)) {
+            printf("Invalid seat code. Use format like A1..%c%d\n", 'A' + BARIS - 1, KOLOM);
+            pauseScreen();
+            continue;
+        }
+        if (seatsArr[row][col] == 1) {
+            printf("Seat %c%d already occupied. Choose another.\n", 'A' + row, col + 1);
+            pauseScreen();
+            continue;
+        }
+        seatsArr[row][col] = 1;
+        snprintf(chosenSeats[chosenCount], 8, "%c%d", 'A' + row, col + 1);
+        chosenCount++;
+        printf("Seat %c%d reserved temporarily.\n", 'A' + row, col + 1);
+        pauseScreen();
+    }
+
+    if (saveSeats(m->id, showIndex, seatsArr) != 0) {
+        printf("Warning: failed to persist seat reservations.\n");
+        pauseScreen();
+    }
+    return 1;
+}
+
+int processPayment(int ticketSubtotal, char *payMethod, int payMethodSize) {
+    if (!payMethod || payMethodSize <= 0) return 0;
+    printf("\n=== Payment Summary (Ticket) ===\n");
+    printf("Total to pay: Rp %d\n", ticketSubtotal);
+    printf("Choose payment method: 1. Cash  2. Card\nChoice: ");
+    int payChoice = 1;
+    if (scanf("%d", &payChoice) != 1) { clearInput(); payChoice = 1; }
+    clearInput();
+    if (payChoice == 2) {
+        strncpy(payMethod, "Card", payMethodSize - 1);
+        payMethod[payMethodSize - 1] = '\0';
+        char card[64];
+        printf("Enter card number (simulated): ");
+        readLine(card, sizeof(card));
+    } else {
+        strncpy(payMethod, "Cash", payMethodSize - 1);
+        payMethod[payMethodSize - 1] = '\0';
+    }
+    printf("Payment processed (%s).\n", payMethod);
+    pauseScreen();
+    return 1;
+}
+
+void appendTransaction(const char *record) {
+    FILE *f = fopen("transactions.txt", "a");
+    if (!f) return;
+    fprintf(f, "%s\n", record);
+    fclose(f);
+}
+
+void logTransaction(const char *username, const Movie *m, const char *showtime, char chosenSeats[][8], int chosenCount, int ticketTotal, const char *payMethod) {
+    FILE *tf = fopen("transactions.txt", "a");
+    if (!tf) return;
+    time_t t = time(NULL);
+    struct tm tm = *localtime(&t);
+    char timestr[64];
+    snprintf(timestr, sizeof(timestr), "%04d-%02d-%02d %02d:%02d:%02d",
+             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    fprintf(tf, "[%s] user:%s | movie:%s | show:%s | seats:", timestr,
+            (username && username[0]) ? username : "guest", m->title, showtime);
+    for (int i = 0; i < chosenCount; ++i) {
+        if (i) fprintf(tf, ",");
+        fprintf(tf, "%s", chosenSeats[i]);
+    }
+    fprintf(tf, " | ticket:%d | ticket_total:%d | payment:%s\n", chosenCount, ticketTotal, payMethod);
+    fclose(tf);
+}
+
+void bookingFlow(void) {
+    loadMovies();
+    int mIndex = selectMovieById();
+    if (mIndex == -1) return;
+    Movie *m = &movies[mIndex];
+
+    int showIndex = selectShowtimeForMovie(m);
+    if (showIndex == -1) return;
+    const char *chosenShow = m->showTimes[showIndex];
+
+    int seatsArr[BARIS][KOLOM];
+    ensureSeatFile(m->id, showIndex);
+    loadSeats(m->id, showIndex, seatsArr);
+    int avail = 0;
+    for (int r = 0; r < BARIS; ++r) for (int c = 0; c < KOLOM; ++c) if (seatsArr[r][c] == 0) avail++;
+    if (avail == 0) { printf("No seats available for this show.\n"); pauseScreen(); return; }
+
+    int qty = selectTicketQuantity(avail);
+    if (qty == -1) return;
+
+    char chosenSeats[200][8];
+    if (!selectSeatsInteractive(m, showIndex, qty, chosenSeats)) {
+        return;
+    }
+
+    int ticketSubtotal = qty * m->price;
+
+    char payMethod[64] = "Cash";
+    if (!processPayment(ticketSubtotal, payMethod, sizeof(payMethod))) {
+        printf("Payment failed.\n");
+        pauseScreen();
+        return;
+    }
+
+    loadSeats(m->id, showIndex, seatsArr);
+    if (saveSeats(m->id, showIndex, seatsArr) != 0) {
+        printf("Warning: failed to save seats file.\n");
+    }
+
+    logTransaction((currentUser >= 0) ? users[currentUser].username : "guest", m, chosenShow, chosenSeats, qty, ticketSubtotal, payMethod);
+
+    clearScreen();
+    printf("===== FINAL SUMMARY =====\n");
+    printf("Name        : %s\n", (currentUser >= 0) ? users[currentUser].fullname : "Guest");
+    printf("Movie       : %s\n", m->title);
+    printf("Showtime    : %s\n", chosenShow);
+    printf("Seats       : ");
+    for (int i = 0; i < qty; ++i) { if (i) printf(", "); printf("%s", chosenSeats[i]); }
+    printf("\nTicket price: Rp %d\nTicket qty   : %d\nTicket total : Rp %d\n", m->price, qty, ticketSubtotal);
+    printf("Payment method: %s\n", payMethod);
+    printf("\nThank you for booking with Cnema!\n");
+    pauseScreen();
+}
+
+void registerPage(void) {
+    clearScreen();
+    printf("=-=-= Register Account =-=-=\n");
+    User acc;
+    char p1[100], p2[100];
+
+    while (1) {
+        printf("Full Name: ");
+        readLine(acc.fullname, sizeof(acc.fullname));
+        if (strlen(acc.fullname) == 0) {
+            printf("Full name cannot be empty.\n");
+            continue;
+        }
+        break;
+    }
+
+    while (1) {
+        printf("Email (@gmail.com): ");
+        readLine(acc.username, sizeof(acc.username));
+        if (!isValidEmail(acc.username)) {
+            printf("Email must end with @gmail.com and be valid.\n");
+            continue;
+        }
+        int exists = 0;
+        for (int i = 0; i < userCount; ++i) {
+            if (strcmp(acc.username, users[i].username) == 0) { exists = 1; break; }
+        }
+        if (exists) {
+            printf("Username already used. Try another.\n");
+            continue;
+        }
+        break;
+    }
+
+    while (1) {
+        printf("Password: ");
+        getPasswordMasked(p1, sizeof(p1));
+        printf("Confirm password: ");
+        getPasswordMasked(p2, sizeof(p2));
+        if (strcmp(p1, p2) != 0) {
+            printf("Passwords do not match. Try again.\n");
+            continue;
+        }
+        if (strlen(p1) == 0) {
+            printf("Password cannot be empty.\n");
+            continue;
+        }
+        strncpy(acc.password, p1, sizeof(acc.password) - 1);
+        acc.password[sizeof(acc.password) - 1] = '\0';
+        break;
+    }
+
+    saveUser(acc);
+    loadUsers();
+
+    printf("\nAccount created successfully!\n");
+    pauseScreen();
+}
+
+int loginPage(void) {
+    clearScreen();
+    printf("=-=-= Login =-=-=\n");
+    char username[100], password[100];
+
+    printf("Username (@gmail.com): ");
+    readLine(username, sizeof(username));
+
+    printf("Password: ");
+    getPasswordMasked(password, sizeof(password));
+
+    for (int i = 0; i < userCount; ++i) {
+        if (strcmp(username, users[i].username) == 0 && strcmp(password, users[i].password) == 0) {
+            printf("\nLogin Successful! Welcome, %s\n", users[i].fullname);
+            currentUser = i;
+            pauseScreen();
+            return 1;
+        }
+    }
+
+    printf("\nInvalid username or password.\n");
+    pauseScreen();
+    return 0;
+}
+
 void userMenu(void) {
     while (currentUser >= 0) {
         clearScreen();
         printf("=== USER MENU ===\n");
         printf("Logged in as: %s (%s)\n", users[currentUser].fullname, users[currentUser].username);
         printf("1. List Movies\n");
-        printf("2. Book Ticket  (placeholder)\n");
+        printf("2. Book Ticket\n");
         printf("3. Logout\n");
         printf("Choice: ");
         int ch;
@@ -416,8 +655,7 @@ void userMenu(void) {
             listMovies();
             pauseScreen();
         } else if (ch == 2) {
-            printf("Booking flow not implemented yet. We'll add it next.\n");
-            pauseScreen();
+            bookingFlow();
         } else if (ch == 3) {
             currentUser = -1;
             printf("Logged out.\n");
@@ -464,6 +702,5 @@ int main(void) {
             pauseScreen();
         }
     }
-
     return 0;
 }
