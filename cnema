@@ -12,7 +12,7 @@
 #define USER 1000
 #define JAM 10
 
-typedef struct{
+typedef struct {
     int id;
     char title[1000];
     char showTimes[100][100];
@@ -20,28 +20,34 @@ typedef struct{
     int price;
 } Movie;
 
-typedef struct{
+typedef struct {
     int id;
     char name[100];
     int price;
 } MenuFNB;
 
-typedef struct{
+typedef struct {
     char username[100];
     char fullname[100];
     char password[100];
 } User;
 
-void clearScreen(){
+User users[USER];
+int userCount = 0;
+int currentUser = -1;
+Movie movies[FILM];
+int movieCount = 0;
+
+void clearScreen() {
     system("cls || clear");
 }
 
-void clearInput(){
+void clearInput() {
     int a;
     while ((a = getchar()) != '\n' && a != EOF) {}
 }
 
-void pauseScreen(){
+void pauseScreen() {
     printf("Press Enter to continue...");
     clearInput();
 }
@@ -100,11 +106,7 @@ int isValidEmail(const char *email) {
     return 1;
 }
 
-User users[USER];
-int userCount = 0;
-int currentUser = -1;
-
-void loadUsers(){
+void loadUsers(void) {
     FILE *f = fopen("users.txt", "r");
     if (!f) {
         userCount = 0;
@@ -115,32 +117,48 @@ void loadUsers(){
     char line[512];
     while (userCount < USER && fgets(line, sizeof(line), f)) {
         line[strcspn(line, "\r\n")] = '\0';
+        if (strlen(line) == 0) continue;
         char uname[100], fname[100], pass[100];
         int matched = sscanf(line, "%99[^|]|%99[^|]|%99[^\n]", uname, fname, pass);
         if (matched == 3) {
-            strncpy(users[userCount].username, uname, sizeof(users[userCount].username)-1);
-            users[userCount].username[sizeof(users[userCount].username)-1] = '\0';
-            strncpy(users[userCount].fullname, fname, sizeof(users[userCount].fullname)-1);
-            users[userCount].fullname[sizeof(users[userCount].fullname)-1] = '\0';
-            strncpy(users[userCount].password, pass, sizeof(users[userCount].password)-1);
-            users[userCount].password[sizeof(users[userCount].password)-1] = '\0';
+            strncpy(users[userCount].username, uname, sizeof(users[userCount].username) - 1);
+            users[userCount].username[sizeof(users[userCount].username) - 1] = '\0';
+            strncpy(users[userCount].fullname, fname, sizeof(users[userCount].fullname) - 1);
+            users[userCount].fullname[sizeof(users[userCount].fullname) - 1] = '\0';
+            strncpy(users[userCount].password, pass, sizeof(users[userCount].password) - 1);
+            users[userCount].password[sizeof(users[userCount].password) - 1] = '\0';
             userCount++;
-        } else {
-
-            continue;
         }
     }
     fclose(f);
 }
 
-void saveUser(User acc){
+void saveUser(User acc) {
     FILE *f = fopen("users.txt", "a");
     if (!f) return;
     fprintf(f, "%s|%s|%s\n", acc.username, acc.fullname, acc.password);
     fclose(f);
 }
 
-void registerPage(){
+void ensureAdminUser(void) {
+    FILE *uf = fopen("users.txt", "r");
+    int hasAdmin = 0;
+    if (uf) {
+        char line[512];
+        while (fgets(line, sizeof(line), uf)) {
+            if (strncmp(line, "admin|", 6) == 0) { hasAdmin = 1; break; }
+        }
+        fclose(uf);
+    }
+    if (!hasAdmin) {
+        FILE *wf = fopen("users.txt", "a");
+        if (!wf) return;
+        fprintf(wf, "admin|Administrator|admin1234\n");
+        fclose(wf);
+    }
+}
+
+void registerPage(void) {
     clearScreen();
     printf("=-=-= Register Account =-=-=\n");
     User acc;
@@ -187,8 +205,8 @@ void registerPage(){
             printf("Password cannot be empty.\n");
             continue;
         }
-        strncpy(acc.password, p1, sizeof(acc.password)-1);
-        acc.password[sizeof(acc.password)-1] = '\0';
+        strncpy(acc.password, p1, sizeof(acc.password) - 1);
+        acc.password[sizeof(acc.password) - 1] = '\0';
         break;
     }
 
@@ -199,7 +217,7 @@ void registerPage(){
     pauseScreen();
 }
 
-int loginPage(){
+int loginPage(void) {
     clearScreen();
     printf("=-=-= Login =-=-=\n");
     char username[100], password[100];
@@ -210,8 +228,8 @@ int loginPage(){
     printf("Password: ");
     getPasswordMasked(password, sizeof(password));
 
-    for (int i = 0; i < userCount; ++i){
-        if (strcmp(username, users[i].username) == 0 && strcmp(password, users[i].password) == 0){
+    for (int i = 0; i < userCount; ++i) {
+        if (strcmp(username, users[i].username) == 0 && strcmp(password, users[i].password) == 0) {
             printf("\nLogin Successful! Welcome, %s\n", users[i].fullname);
             currentUser = i;
             pauseScreen();
@@ -224,13 +242,168 @@ int loginPage(){
     return 0;
 }
 
-void userMenu() {
+void seatFilename(int movieId, int showIndex, char *out, size_t outsz) {
+    if (!out || outsz == 0) return;
+    snprintf(out, outsz, "seats_%d_%d.txt", movieId, showIndex);
+}
+
+void ensureSeatFile(int movieId, int showIndex) {
+    char fname[256];
+    seatFilename(movieId, showIndex, fname, sizeof(fname));
+    FILE *f = fopen(fname, "r");
+    if (f) { fclose(f); return; }
+    f = fopen(fname, "w");
+    if (!f) return;
+    for (int r = 0; r < BARIS; ++r) {
+        for (int c = 0; c < KOLOM; ++c) {
+            fprintf(f, "0");
+            if (c < KOLOM - 1) fprintf(f, " ");
+        }
+        fprintf(f, "\n");
+    }
+    fclose(f);
+}
+
+int loadSeats(int movieId, int showIndex, int seats[BARIS][KOLOM]) {
+    char fname[256];
+    seatFilename(movieId, showIndex, fname, sizeof(fname));
+    FILE *f = fopen(fname, "r");
+    if (!f) {
+        ensureSeatFile(movieId, showIndex);
+        for (int r = 0; r < BARIS; ++r) for (int c = 0; c < KOLOM; ++c) seats[r][c] = 0;
+        return 0;
+    }
+    for (int r = 0; r < BARIS; ++r) {
+        for (int c = 0; c < KOLOM; ++c) {
+            int v = 0;
+            if (fscanf(f, "%d", &v) == 1) seats[r][c] = (v ? 1 : 0);
+            else seats[r][c] = 0;
+        }
+    }
+    fclose(f);
+    return 0;
+}
+
+int saveSeats(int movieId, int showIndex, int seats[BARIS][KOLOM]) {
+    char fname[256];
+    seatFilename(movieId, showIndex, fname, sizeof(fname));
+    FILE *f = fopen(fname, "w");
+    if (!f) return -1;
+    for (int r = 0; r < BARIS; ++r) {
+        for (int c = 0; c < KOLOM; ++c) {
+            fprintf(f, "%d", seats[r][c] ? 1 : 0);
+            if (c < KOLOM - 1) fprintf(f, " ");
+        }
+        fprintf(f, "\n");
+    }
+    fclose(f);
+    return 0;
+}
+
+void displaySeatGrid(int seats[BARIS][KOLOM]) {
+    printf("\n       ");
+    for (int c = 1; c <= KOLOM; ++c) printf(" %2d ", c);
+    printf("\n");
+    for (int r = 0; r < BARIS; ++r) {
+        char rowc = 'A' + r;
+        printf(" %c    ", rowc);
+        for (int c = 0; c < KOLOM; ++c) {
+            if (seats[r][c] == 0) printf("[ ] ");
+            else printf("[X] ");
+        }
+        printf("\n");
+    }
+    printf("\n             SCREEN\n\n");
+}
+
+void loadMovies(void) {
+    FILE *f = fopen("movies.txt", "r");
+    if (!f) { movieCount = 0; return; }
+
+    movieCount = 0;
+    char line[2048];
+    while (movieCount < FILM && fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\r\n")] = '\0';
+        if (strlen(line) == 0) continue;
+        Movie m;
+        char showsBuf[1024] = "";
+        int matched = sscanf(line, "%d|%999[^|]|%1023[^|]|%d", &m.id, m.title, showsBuf, &m.price);
+        if (matched >= 2) {
+            if (matched == 2) { m.price = 0; showsBuf[0] = '\0'; }
+            char *t = m.title;
+            while (*t && isspace((unsigned char)*t)) t++;
+            if (t != m.title) memmove(m.title, t, strlen(t) + 1);
+            size_t L = strlen(m.title);
+            while (L > 0 && isspace((unsigned char)m.title[L-1])) m.title[--L] = '\0';
+
+            m.showCount = 0;
+            if (strlen(showsBuf) > 0) {
+                char tmp[1024];
+                strncpy(tmp, showsBuf, sizeof(tmp) - 1);
+                tmp[sizeof(tmp) - 1] = '\0';
+                char *tok = strtok(tmp, ",");
+                while (tok && m.showCount < JAM) {
+                    while (*tok && isspace((unsigned char)*tok)) tok++;
+                    char *end = tok + strlen(tok) - 1;
+                    while (end > tok && isspace((unsigned char)*end)) { *end = '\0'; end--; }
+                    strncpy(m.showTimes[m.showCount], tok, sizeof(m.showTimes[m.showCount]) - 1);
+                    m.showTimes[m.showCount][sizeof(m.showTimes[m.showCount]) - 1] = '\0';
+                    m.showCount++;
+                    tok = strtok(NULL, ",");
+                }
+            }
+            movies[movieCount++] = m;
+        }
+    }
+    fclose(f);
+}
+
+int saveMovie(const Movie *m) {
+    if (!m) return -1;
+    FILE *f = fopen("movies.txt", "a");
+    if (!f) return -1;
+    char showsBuf[1024] = "";
+    for (int i = 0; i < m->showCount; ++i) {
+        if (i) strcat(showsBuf, ",");
+        strcat(showsBuf, m->showTimes[i]);
+    }
+    fprintf(f, "%d|%s|%s|%d\n", m->id, m->title, showsBuf, m->price);
+    fclose(f);
+    if (movieCount < FILM) movies[movieCount++] = *m;
+    return 0;
+}
+
+void listMovies(void) {
+    if (movieCount == 0) {
+        printf("\nNo movies available.\n");
+        return;
+    }
+    printf("\n=== Movies ===\n");
+    for (int i = 0; i < movieCount; ++i) {
+        printf("ID:%d | %s | Rp %d | Shows: ", movies[i].id, movies[i].title, movies[i].price);
+        for (int j = 0; j < movies[i].showCount; ++j) {
+            printf("%s", movies[i].showTimes[j]);
+            if (j < movies[i].showCount - 1) printf(", ");
+        }
+        printf("\n");
+    }
+}
+
+int findMovieIndexById(int id) {
+    for (int i = 0; i < movieCount; ++i) {
+        if (movies[i].id == id) return i;
+    }
+    return -1;
+}
+
+void userMenu(void) {
     while (currentUser >= 0) {
         clearScreen();
         printf("=== USER MENU ===\n");
         printf("Logged in as: %s (%s)\n", users[currentUser].fullname, users[currentUser].username);
-        printf("1. Book Ticket  (placeholder)\n");
-        printf("2. Logout\n");
+        printf("1. List Movies\n");
+        printf("2. Book Ticket  (placeholder)\n");
+        printf("3. Logout\n");
         printf("Choice: ");
         int ch;
         if (scanf("%d", &ch) != 1) {
@@ -239,9 +412,13 @@ void userMenu() {
         }
         clearInput();
         if (ch == 1) {
-            printf("Booking flow not implemented yet. (will add next parts)\n");
+            loadMovies();
+            listMovies();
             pauseScreen();
         } else if (ch == 2) {
+            printf("Booking flow not implemented yet. We'll add it next.\n");
+            pauseScreen();
+        } else if (ch == 3) {
             currentUser = -1;
             printf("Logged out.\n");
             pauseScreen();
@@ -253,27 +430,10 @@ void userMenu() {
     }
 }
 
-void ensureAdminUser(void) {
-    FILE *uf = fopen("users.txt", "r");
-    int hasAdmin = 0;
-    if (uf) {
-        char line[512];
-        while (fgets(line, sizeof(line), uf)) {
-            if (strncmp(line, "admin|", 6) == 0) { hasAdmin = 1; break; }
-        }
-        fclose(uf);
-    }
-    if (!hasAdmin) {
-        FILE *wf = fopen("users.txt", "a");
-        if (!wf) return;
-        fprintf(wf, "admin|Administrator|admin1234\n");
-        fclose(wf);
-    }
-}
-
 int main(void) {
     ensureAdminUser();
     loadUsers();
+    loadMovies();
 
     while (1) {
         clearScreen();
@@ -304,5 +464,6 @@ int main(void) {
             pauseScreen();
         }
     }
+
     return 0;
 }
