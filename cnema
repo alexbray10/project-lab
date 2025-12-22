@@ -33,7 +33,7 @@ typedef struct{
 } User;
 
 void clearScreen(){
-    system("cls");
+    system("cls || clear");
 }
 
 void clearInput(){
@@ -46,47 +46,137 @@ void pauseScreen(){
     clearInput();
 }
 
+void readLine(char *buf, int size) {
+    if (!buf || size <= 0) return;
+    if (fgets(buf, size, stdin) == NULL) {
+        buf[0] = '\0';
+        return;
+    }
+    buf[strcspn(buf, "\r\n")] = '\0';
+}
+
+void getPasswordMasked(char *buf, int bufsize) {
+    if (!buf || bufsize <= 0) return;
+    int idx = 0;
+    buf[0] = '\0';
+    while (1) {
+        int ch = getch();
+        if (ch == 13 || ch == 10) {
+            putchar('\n');
+            break;
+        } else if (ch == 8 || ch == 127) {
+            if (idx > 0) {
+                idx--;
+                buf[idx] = '\0';
+                printf("\b \b");
+            }
+        } else if (isprint((unsigned char)ch) && idx < bufsize - 1) {
+            buf[idx++] = (char)ch;
+            buf[idx] = '\0';
+            putchar('*');
+        }
+    }
+}
+
+int isValidEmail(const char *email) {
+    if (!email) return 0;
+    const char *suffix = "@gmail.com";
+    size_t L = strlen(email);
+    size_t S = strlen(suffix);
+    if (L <= S) return 0;
+    if (strcmp(email + L - S, suffix) != 0) return 0;
+    const char *at = strchr(email, '@');
+    if (!at || at == email) return 0;
+    return 1;
+}
+
 User users[USER];
 int userCount = 0;
+int currentUser = -1;
 
 void loadUsers(){
     FILE *f = fopen("users.txt", "r");
-    if (!f) return;
+    if (!f) {
+        userCount = 0;
+        return;
+    }
 
     userCount = 0;
-    while (fscanf(f, "%[^|]|%[^|]|%[^\n]\n", users[userCount].username, users[userCount].fullname, users[userCount].password) == 3) {
+    while (userCount < USER) {
+        if (fscanf(f, "%99[^|]|%99[^|]|%99[^\n]\n",
+                   users[userCount].username,
+                   users[userCount].fullname,
+                   users[userCount].password) != 3) {
+            break;
+        }
         userCount++;
     }
-    fclose(f); 
+    fclose(f);
 }
 
 void saveUser(User acc){
     FILE *f = fopen("users.txt", "a");
+    if (!f) return;
     fprintf(f, "%s|%s|%s\n", acc.username, acc.fullname, acc.password);
     fclose(f);
 }
 
-//register & login page
 void registerPage(){
     clearScreen();
     printf("=-=-= Register Account =-=-=\n");
     User acc;
-    
-    printf("Full Name: ");
-    fgets(acc.fullname, sizeof(acc.fullname), stdin);
-    acc.fullname[strcspn(acc.fullname, "\n")] = 0; 
+    char p1[100], p2[100];
 
-    printf("Email (@gmail.com): ");
-    fgets(acc.username, sizeof(acc.username), stdin);
-    acc.username[strcspn(acc.username, "\n")] = 0; 
+    while (1) {
+        printf("Full Name: ");
+        readLine(acc.fullname, sizeof(acc.fullname));
+        if (strlen(acc.fullname) == 0) {
+            printf("Full name cannot be empty.\n");
+            continue;
+        }
+        break;
+    }
 
-    printf("Password: ");
-    fgets(acc.password, sizeof(acc.password), stdin);
-    acc.password[strcspn(acc.password, "\n")] = 0; 
+    while (1) {
+        printf("Email (@gmail.com): ");
+        readLine(acc.username, sizeof(acc.username));
+        if (!isValidEmail(acc.username)) {
+            printf("Email must end with @gmail.com and be valid.\n");
+            continue;
+        }
+        int exists = 0;
+        for (int i = 0; i < userCount; ++i) {
+            if (strcmp(acc.username, users[i].username) == 0) { exists = 1; break; }
+        }
+        if (exists) {
+            printf("Username already used. Try another.\n");
+            continue;
+        }
+        break;
+    }
+
+    while (1) {
+        printf("Password: ");
+        getPasswordMasked(p1, sizeof(p1));
+        printf("Confirm password: ");
+        getPasswordMasked(p2, sizeof(p2));
+        if (strcmp(p1, p2) != 0) {
+            printf("Passwords do not match. Try again.\n");
+            continue;
+        }
+        if (strlen(p1) == 0) {
+            printf("Password cannot be empty.\n");
+            continue;
+        }
+        strncpy(acc.password, p1, sizeof(acc.password)-1);
+        acc.password[sizeof(acc.password)-1] = '\0';
+        break;
+    }
 
     saveUser(acc);
-    printf("\nAccount created successfully!\n");
+    loadUsers();
 
+    printf("\nAccount created successfully!\n");
     pauseScreen();
 }
 
@@ -96,16 +186,15 @@ int loginPage(){
     char username[100], password[100];
 
     printf("Username (@gmail.com): ");
-    fgets(username, sizeof(username), stdin);
-    username[strcspn(username, "\n")] = 0;
+    readLine(username, sizeof(username));
 
     printf("Password: ");
-    fgets(password, sizeof(password), stdin);
-    password[strcspn(password, "\n")] = 0;
+    getPasswordMasked(password, sizeof(password));
 
-    for (int i=0;i<userCount;i++){
-        if(strcmp(username, users[i].username) == 0 && strcmp(password, users[i].password) == 0){
-            printf("\nLogin Successful!\n");
+    for (int i = 0; i < userCount; ++i){
+        if (strcmp(username, users[i].username) == 0 && strcmp(password, users[i].password) == 0){
+            printf("\nLogin Successful! Welcome, %s\n", users[i].fullname);
+            currentUser = i;
             pauseScreen();
             return 1;
         }
@@ -116,38 +205,89 @@ int loginPage(){
     return 0;
 }
 
-//bikin juga buat check @gmail.com nya, harus ada validation tiap input jangan sampe error
-//masking password pake *
+void userMenu() {
+    while (currentUser >= 0) {
+        clearScreen();
+        printf("=== USER MENU ===\n");
+        printf("Logged in as: %s (%s)\n", users[currentUser].fullname, users[currentUser].username);
+        printf("1. Book Ticket  (placeholder)\n");
+        printf("2. Logout\n");
+        printf("Choice: ");
+        int ch;
+        if (scanf("%d", &ch) != 1) {
+            clearInput();
+            continue;
+        }
+        clearInput();
+        if (ch == 1) {
+            printf("Booking flow not implemented yet. (will add next parts)\n");
+            pauseScreen();
+        } else if (ch == 2) {
+            currentUser = -1;
+            printf("Logged out.\n");
+            pauseScreen();
+            break;
+        } else {
+            printf("Invalid choice.\n");
+            pauseScreen();
+        }
+    }
+}
 
-int main(){
-//untuk sementara di main dulu, nanti dicoba pakai function
+int main(void) {
+    {
+        FILE *uf = fopen("users.txt", "r");
+        int hasAdmin = 0;
+        if (uf) {
+            char line[512];
+            while (fgets(line, sizeof(line), uf)) {
+                if (strncmp(line, "admin|", 6) == 0) { hasAdmin = 1; break; }
+            }
+            fclose(uf);
+        }
+        if (!hasAdmin) {
+            FILE *wf = fopen("users.txt", "a");
+            if (wf) {
+                fprintf(wf, "admin|Administrator|admin1234\n");
+                fclose(wf);
+            }
+        }
+    }
+
     loadUsers();
 
-    while(1){
+    while (1) {
         clearScreen();
         printf("=-=-= Welcome to Cnema! =-=-=\n");
         printf("1. Login\n");
         printf("2. Register\n");
         printf("3. Exit\n");
+        printf("Choice: ");
 
         int n;
-        scanf("%d", &n);
+        if (scanf("%d", &n) != 1) {
+            clearInput();
+            continue;
+        }
         clearInput();
 
-        if (n == 1){
-                if(loginPage()){
-                        break;
-                }
+        if (n == 1) {
+            if (loginPage()) {
+                userMenu();
+            }
         }
-        else if (n == 2){
-                registerPage();
+        else if (n == 2) {
+            registerPage();
         }
-        else if (n == 3){
-                return 0;
+        else if (n == 3) {
+            printf("Goodbye!\n");
+            break;
         }
         else {
-                printf("Invalid.\n");
-                pauseScreen();
+            printf("Invalid.\n");
+            pauseScreen();
         }
-        return 0;
+    }
+
+    return 0;
 }
