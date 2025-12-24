@@ -202,7 +202,6 @@ int saveUserToFile(const char *usersFile, const char *username, const char *pass
     return 1;
 }
 
-/* Seat file helpers */
 void seatFilename(int movieID, int showIndex, char *out, size_t outsz) {
     snprintf(out, outsz, "seats_%d_%d.txt", movieID, showIndex);
 }
