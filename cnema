@@ -5,60 +5,78 @@
 #include <time.h>
 #include <conio.h>
 
-#define BARIS 9
-#define KOLOM 12
-#define FILM 100
-#define FNB 100
-#define USER 1000
-#define JAM 10
+#define MAX_MOVIES 300
+#define MAX_SHOWS 20
+#define MAX_TITLE 200
+#define MAX_LINE 512
+#define MAX_FNB 300
+#define MAX_USERS 1000
+#define SEAT_ROWS 9
+#define SEAT_COLS 12
 
 typedef struct {
     int id;
-    char title[1000];
-    char showTimes[100][100];
+    char title[MAX_TITLE];
+    char showtimes[MAX_SHOWS][16];
     int showCount;
     int price;
 } Movie;
 
 typedef struct {
     int id;
-    char name[100];
+    char name[128];
     int price;
-} MenuFNB;
+} FNBItem;
 
 typedef struct {
-    char username[100];
-    char fullname[100];
-    char password[100];
+    char username[128];
+    char fullname[128];
+    char password[128];
 } User;
 
-User users[USER];
-int userCount = 0;
-int currentUser = -1;
-Movie movies[FILM];
+Movie movies[MAX_MOVIES];
 int movieCount = 0;
 
-void clearScreen() {
+FNBItem fnbs[MAX_FNB];
+int fnbCount = 0;
+
+User users[MAX_USERS];
+int userCount = 0;
+
+char sessionUsername[128] = "";
+char sessionFullname[128] = "";
+int sessionIsAdmin = 0;
+
+void flushStdin(void) {
+    int c;
+    while ((c = getchar()) != '\n' && c != EOF) {}
+}
+
+void trimNewline(char *s) {
+    if (!s) return;
+    size_t L = strlen(s);
+    while (L > 0 && (s[L-1] == '\n' || s[L-1] == '\r')) {
+        s[L-1] = '\0';
+        L--;
+    }
+}
+
+void trimSpaces(char *s) {
+    if (!s) return;
+    char *p = s;
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (p != s) memmove(s, p, strlen(p) + 1);
+    int len = (int)strlen(s);
+    while (len > 0 && isspace((unsigned char)s[len-1])) s[--len] = '\0';
+}
+
+void clearScreen(void) {
     system("cls || clear");
 }
 
-void clearInput() {
-    int a;
-    while ((a = getchar()) != '\n' && a != EOF) {}
-}
-
-void pauseScreen() {
-    printf("Press Enter to continue...");
-    clearInput();
-}
-
-void readLine(char *buf, int size) {
-    if (!buf || size <= 0) return;
-    if (fgets(buf, size, stdin) == NULL) {
-        buf[0] = '\0';
-        return;
-    }
-    buf[strcspn(buf, "\r\n")] = '\0';
+void pauseConsole(void) {
+    printf("\nPress ENTER to continue...");
+    flushStdin();
 }
 
 void getPasswordMasked(char *buf, int bufsize) {
@@ -67,15 +85,18 @@ void getPasswordMasked(char *buf, int bufsize) {
     buf[0] = '\0';
     while (1) {
         int ch = getch();
-        if (ch == 13 || ch == 10) {
+        if (ch == '\n' || ch == '\r' || ch == 10 || ch == 13) {
             putchar('\n');
             break;
-        } else if (ch == 8 || ch == 127) {
+        }
+        if (ch == 127 || ch == 8) {
             if (idx > 0) {
                 idx--;
                 buf[idx] = '\0';
                 printf("\b \b");
             }
+        } else if (ch == 3) {
+            exit(0);
         } else if (isprint((unsigned char)ch) && idx < bufsize - 1) {
             buf[idx++] = (char)ch;
             buf[idx] = '\0';
@@ -84,113 +105,141 @@ void getPasswordMasked(char *buf, int bufsize) {
     }
 }
 
-int isValidEmail(const char *email) {
-    if (!email) return 0;
-    size_t len = strlen(email);
-    if (len == 0) return 0;
-
-    for (size_t i = 0; i < len; ++i) {
-        if (isspace((unsigned char)email[i])) return 0;
+void loadMovies(const char *moviesFile) {
+    movieCount = 0;
+    FILE *f = fopen(moviesFile, "r");
+    if (!f) return;
+    char line[MAX_LINE];
+    while (fgets(line, sizeof(line), f)) {
+        trimNewline(line);
+        trimSpaces(line);
+        if (strlen(line) == 0) continue;
+        Movie m;
+        char shows[256] = "";
+        int matched = sscanf(line, "%d|%199[^|]|%255[^|]|%d", &m.id, m.title, shows, &m.price);
+        if (matched >= 2) {
+            if (matched == 2) {
+                m.price = 0;
+                shows[0] = '\0';
+            }
+            trimSpaces(m.title);
+            trimSpaces(shows);
+            m.showCount = 0;
+            if (strlen(shows) > 0) {
+                char temp[256];
+                strncpy(temp, shows, sizeof(temp) - 1);
+                temp[sizeof(temp) - 1] = '\0';
+                char *t = strtok(temp, ",");
+                while (t && m.showCount < MAX_SHOWS) {
+                    trimSpaces(t);
+                    strncpy(m.showtimes[m.showCount], t, 15);
+                    m.showtimes[m.showCount][15] = '\0';
+                    m.showCount++;
+                    t = strtok(NULL, ",");
+                }
+            }
+            movies[movieCount++] = m;
+            if (movieCount >= MAX_MOVIES) break;
+        }
     }
+    fclose(f);
+}
 
-    const char *at = strchr(email, '@');
-    if (!at) return 0;
-    if (at == email) return 0;
-    if (strchr(at + 1, '@') != NULL) return 0;
+void loadFnbs(const char *fnbFile) {
+    fnbCount = 0;
+    FILE *f = fopen(fnbFile, "r");
+    if (!f) return;
+    char line[MAX_LINE];
+    while (fgets(line, sizeof(line), f)) {
+        trimNewline(line);
+        trimSpaces(line);
+        if (strlen(line) == 0) continue;
+        FNBItem it;
+        int matched = sscanf(line, "%d|%127[^|]|%d", &it.id, it.name, &it.price);
+        if (matched >= 2) {
+            if (matched == 2) it.price = 0;
+            trimSpaces(it.name);
+            fnbs[fnbCount++] = it;
+            if (fnbCount >= MAX_FNB) break;
+        }
+    }
+    fclose(f);
+}
 
-    const char *suffix = "@gmail.com";
-    size_t sfxLen = strlen(suffix);
-    if (len <= sfxLen) return 0;
-    if (strcmp(email + len - sfxLen, suffix) != 0) return 0;
+void loadUsersFromFile(const char *usersFile) {
+    userCount = 0;
+    FILE *f = fopen(usersFile, "r");
+    if (!f) return;
+    char line[MAX_LINE];
+    while (fgets(line, sizeof(line), f)) {
+        trimNewline(line);
+        trimSpaces(line);
+        if (strlen(line) == 0) continue;
+        char uname[128], pass[128], fullname[128];
+        int matched = sscanf(line, "%127[^|]|%127[^|]|%127[^|]", uname, pass, fullname);
+        if (matched >= 2) {
+            trimSpaces(uname);
+            trimSpaces(pass);
+            trimSpaces(fullname);
+            strncpy(users[userCount].username, uname, sizeof(users[userCount].username) - 1);
+            users[userCount].username[sizeof(users[userCount].username) - 1] = '\0';
+            strncpy(users[userCount].password, pass, sizeof(users[userCount].password) - 1);
+            users[userCount].password[sizeof(users[userCount].password) - 1] = '\0';
+            strncpy(users[userCount].fullname, fullname, sizeof(users[userCount].fullname) - 1);
+            users[userCount].fullname[sizeof(users[userCount].fullname) - 1] = '\0';
+            userCount++;
+            if (userCount >= MAX_USERS) break;
+        }
+    }
+    fclose(f);
+}
 
+int saveUserToFile(const char *usersFile, const char *username, const char *password, const char *fullname) {
+    FILE *f = fopen(usersFile, "a");
+    if (!f) return 0;
+    fprintf(f, "%s|%s|%s\n", username, password, fullname);
+    fclose(f);
     return 1;
 }
 
-void loadUsers(void) {
-    FILE *f = fopen("users.txt", "r");
-    if (!f) {
-        userCount = 0;
+/* Seat file helpers */
+void seatFilename(int movieID, int showIndex, char *out, size_t outsz) {
+    snprintf(out, outsz, "seats_%d_%d.txt", movieID, showIndex);
+}
+
+void ensureSeatFile(int movieID, int showIndex) {
+    char fname[256];
+    seatFilename(movieID, showIndex, fname, sizeof(fname));
+    FILE *f = fopen(fname, "r");
+    if (f) {
+        fclose(f);
         return;
     }
-
-    userCount = 0;
-    char line[512];
-    while (userCount < USER && fgets(line, sizeof(line), f)) {
-        line[strcspn(line, "\r\n")] = '\0';
-        if (strlen(line) == 0) continue;
-        char uname[100], fname[100], pass[100];
-        int matched = sscanf(line, "%99[^|]|%99[^|]|%99[^\n]", uname, fname, pass);
-        if (matched == 3) {
-            strncpy(users[userCount].username, uname, sizeof(users[userCount].username) - 1);
-            users[userCount].username[sizeof(users[userCount].username) - 1] = '\0';
-            strncpy(users[userCount].fullname, fname, sizeof(users[userCount].fullname) - 1);
-            users[userCount].fullname[sizeof(users[userCount].fullname) - 1] = '\0';
-            strncpy(users[userCount].password, pass, sizeof(users[userCount].password) - 1);
-            users[userCount].password[sizeof(users[userCount].password) - 1] = '\0';
-            userCount++;
-        }
-    }
-    fclose(f);
-}
-
-void saveUser(User acc) {
-    FILE *f = fopen("users.txt", "a");
-    if (!f) return;
-    fprintf(f, "%s|%s|%s\n", acc.username, acc.fullname, acc.password);
-    fclose(f);
-}
-
-void ensureAdminUser(void) {
-    FILE *uf = fopen("users.txt", "r");
-    int hasAdmin = 0;
-    if (uf) {
-        char line[512];
-        while (fgets(line, sizeof(line), uf)) {
-            if (strncmp(line, "admin|", 6) == 0) { hasAdmin = 1; break; }
-        }
-        fclose(uf);
-    }
-    if (!hasAdmin) {
-        FILE *wf = fopen("users.txt", "a");
-        if (!wf) return;
-        fprintf(wf, "admin|Administrator|admin1234\n");
-        fclose(wf);
-    }
-}
-
-void seatFilename(int movieId, int showIndex, char *out, size_t outsz) {
-    if (!out || outsz == 0) return;
-    snprintf(out, outsz, "seats_%d_%d.txt", movieId, showIndex);
-}
-
-void ensureSeatFile(int movieId, int showIndex) {
-    char fname[256];
-    seatFilename(movieId, showIndex, fname, sizeof(fname));
-    FILE *f = fopen(fname, "r");
-    if (f) { fclose(f); return; }
     f = fopen(fname, "w");
     if (!f) return;
-    for (int r = 0; r < BARIS; ++r) {
-        for (int c = 0; c < KOLOM; ++c) {
+    for (int r = 0; r < SEAT_ROWS; r++) {
+        for (int c = 0; c < SEAT_COLS; c++) {
             fprintf(f, "0");
-            if (c < KOLOM - 1) fprintf(f, " ");
+            if (c < SEAT_COLS - 1) fprintf(f, " ");
         }
         fprintf(f, "\n");
     }
     fclose(f);
 }
 
-int loadSeats(int movieId, int showIndex, int seats[BARIS][KOLOM]) {
+int loadSeats(int movieID, int showIndex, int seats[SEAT_ROWS][SEAT_COLS]) {
     char fname[256];
-    seatFilename(movieId, showIndex, fname, sizeof(fname));
+    seatFilename(movieID, showIndex, fname, sizeof(fname));
     FILE *f = fopen(fname, "r");
     if (!f) {
-        ensureSeatFile(movieId, showIndex);
-        for (int r = 0; r < BARIS; ++r) for (int c = 0; c < KOLOM; ++c) seats[r][c] = 0;
+        ensureSeatFile(movieID, showIndex);
+        for (int r = 0; r < SEAT_ROWS; r++) {
+            for (int c = 0; c < SEAT_COLS; c++) seats[r][c] = 0;
+        }
         return 0;
     }
-    for (int r = 0; r < BARIS; ++r) {
-        for (int c = 0; c < KOLOM; ++c) {
+    for (int r = 0; r < SEAT_ROWS; r++) {
+        for (int c = 0; c < SEAT_COLS; c++) {
             int v = 0;
             if (fscanf(f, "%d", &v) == 1) seats[r][c] = (v ? 1 : 0);
             else seats[r][c] = 0;
@@ -200,15 +249,15 @@ int loadSeats(int movieId, int showIndex, int seats[BARIS][KOLOM]) {
     return 0;
 }
 
-int saveSeats(int movieId, int showIndex, int seats[BARIS][KOLOM]) {
+int saveSeats(int movieID, int showIndex, int seats[SEAT_ROWS][SEAT_COLS]) {
     char fname[256];
-    seatFilename(movieId, showIndex, fname, sizeof(fname));
+    seatFilename(movieID, showIndex, fname, sizeof(fname));
     FILE *f = fopen(fname, "w");
     if (!f) return -1;
-    for (int r = 0; r < BARIS; ++r) {
-        for (int c = 0; c < KOLOM; ++c) {
+    for (int r = 0; r < SEAT_ROWS; r++) {
+        for (int c = 0; c < SEAT_COLS; c++) {
             fprintf(f, "%d", seats[r][c] ? 1 : 0);
-            if (c < KOLOM - 1) fprintf(f, " ");
+            if (c < SEAT_COLS - 1) fprintf(f, " ");
         }
         fprintf(f, "\n");
     }
@@ -216,491 +265,831 @@ int saveSeats(int movieId, int showIndex, int seats[BARIS][KOLOM]) {
     return 0;
 }
 
-void displaySeatGrid(int seats[BARIS][KOLOM]) {
-    printf("\n       ");
-    for (int c = 1; c <= KOLOM; ++c) printf(" %2d ", c);
+void displaySeatGrid(int seats[SEAT_ROWS][SEAT_COLS]) {
+    printf("\n     ");
+    for (int c = 1; c <= SEAT_COLS; ++c) printf(" %2d ", c);
     printf("\n");
-    for (int r = 0; r < BARIS; ++r) {
+    for (int r = 0; r < SEAT_ROWS; ++r) {
         char rowc = 'A' + r;
         printf(" %c    ", rowc);
-        for (int c = 0; c < KOLOM; ++c) {
+        for (int c = 0; c < SEAT_COLS; ++c) {
             if (seats[r][c] == 0) printf("[ ] ");
             else printf("[X] ");
         }
         printf("\n");
     }
-    printf("\n             SCREEN\n\n");
+    printf("\n             		SCREEN\n\n");
 }
 
-void loadMovies(void) {
-    FILE *f = fopen("movies.txt", "r");
-    if (!f) { movieCount = 0; return; }
+int validShowtimeFormat(const char *s) {
+    if (!s) return 0;
+    int len = (int)strlen(s);
+    if (len < 4 || len > 5) return 0;
+    const char *p = strchr(s, ':');
+    if (!p) return 0;
+    int pre = (int)(p - s);
+    int post = len - pre - 1;
+    if (pre < 1 || pre > 2 || post != 2) return 0;
+    for (int i = 0; i < pre; i++) {
+        if (!isdigit((unsigned char)s[i])) return 0;
+    }
+    for (int i = pre + 1; i < len; i++) {
+        if (!isdigit((unsigned char)s[i])) return 0;
+    }
+    return 1;
+}
 
-    movieCount = 0;
-    char line[2048];
-    while (movieCount < FILM && fgets(line, sizeof(line), f)) {
-        line[strcspn(line, "\r\n")] = '\0';
-        if (strlen(line) == 0) continue;
-        Movie m;
-        char showsBuf[1024] = "";
-        int matched = sscanf(line, "%d|%999[^|]|%1023[^|]|%d", &m.id, m.title, showsBuf, &m.price);
-        if (matched >= 2) {
-            if (matched == 2) { m.price = 0; showsBuf[0] = '\0'; }
-            char *t = m.title;
-            while (*t && isspace((unsigned char)*t)) t++;
-            if (t != m.title) memmove(m.title, t, strlen(t) + 1);
-            size_t L = strlen(m.title);
-            while (L > 0 && isspace((unsigned char)m.title[L-1])) m.title[--L] = '\0';
-
-            m.showCount = 0;
-            if (strlen(showsBuf) > 0) {
-                char tmp[1024];
-                strncpy(tmp, showsBuf, sizeof(tmp) - 1);
-                tmp[sizeof(tmp) - 1] = '\0';
-                char *tok = strtok(tmp, ",");
-                while (tok && m.showCount < JAM) {
-                    while (*tok && isspace((unsigned char)*tok)) tok++;
-                    char *end = tok + strlen(tok) - 1;
-                    while (end > tok && isspace((unsigned char)*end)) { *end = '\0'; end--; }
-                    strncpy(m.showTimes[m.showCount], tok, sizeof(m.showTimes[m.showCount]) - 1);
-                    m.showTimes[m.showCount][sizeof(m.showTimes[m.showCount]) - 1] = '\0';
-                    m.showCount++;
-                    tok = strtok(NULL, ",");
-                }
-            }
-            movies[movieCount++] = m;
+int titleIsValid(const char *s) {
+    if (!s) return 0;
+    int L = (int)strlen(s);
+    if (L == 0) return 0;
+    int allDigit = 1;
+    for (int i = 0; i < L; i++) {
+        if (!isdigit((unsigned char)s[i])) {
+            allDigit = 0;
+            break;
         }
     }
+    if (allDigit) return 0;
+    return 1;
+}
+
+void appendTransactionLog(const char *line) {
+    FILE *f = fopen("transactions.txt", "a");
+    if (!f) return;
+    fprintf(f, "%s\n", line);
     fclose(f);
 }
 
-int saveMovie(const Movie *m) {
-    if (!m) return -1;
-    FILE *f = fopen("movies.txt", "a");
-    if (!f) return -1;
-    char showsBuf[1024] = "";
-    for (int i = 0; i < m->showCount; ++i) {
-        if (i) strcat(showsBuf, ",");
-        strcat(showsBuf, m->showTimes[i]);
+typedef struct {
+    char name[128];
+    int qty;
+    int price;
+} OrderItem;
+
+int ciStrcmp(const char *a, const char *b) {
+    while (*a && *b) {
+        char ca = tolower((unsigned char)*a);
+        char cb = tolower((unsigned char)*b);
+        if (ca != cb) return (int)(ca - cb);
+        a++; b++;
     }
-    fprintf(f, "%d|%s|%s|%d\n", m->id, m->title, showsBuf, m->price);
-    fclose(f);
-    if (movieCount < FILM) movies[movieCount++] = *m;
-    return 0;
+    return (int)(tolower((unsigned char)*a) - tolower((unsigned char)*b));
 }
 
-void listMovies(void) {
-    if (movieCount == 0) {
-        printf("\nNo movies available.\n");
+int orderItemCmp(const void *pa, const void *pb) {
+    const OrderItem *a = (const OrderItem*)pa;
+    const OrderItem *b = (const OrderItem*)pb;
+    return ciStrcmp(a->name, b->name);
+}
+
+void printFnbReceipt(OrderItem items[], int count) {
+    if (count <= 0) {
+        printf("\nNo F&B ordered.\n");
         return;
     }
+    OrderItem *copy = malloc(sizeof(OrderItem) * count);
+    if (!copy) {
+        printf("\nF&B Items (unsorted):\n");
+        for (int i = 0; i < count; i++) {
+            printf("- %s x%d = Rp %d\n", items[i].name, items[i].qty, items[i].qty * items[i].price);
+        }
+        return;
+    }
+    for (int i = 0; i < count; i++) copy[i] = items[i];
+    qsort(copy, count, sizeof(OrderItem), orderItemCmp);
+
+    printf("\n====== STRUK F&B (sorted ascending) ======\n");
+    int subtotal = 0;
+    for (int i = 0; i < count; i++) {
+        int lineTotal = copy[i].qty * copy[i].price;
+        printf("%-30s x%3d   Rp %8d\n", copy[i].name, copy[i].qty, lineTotal);
+        subtotal += lineTotal;
+    }
+    printf("-----------------------------------------\n");
+    printf("F&B Subtotal: Rp %d\n", subtotal);
+    printf("=========================================\n");
+
+    free(copy);
+}
+
+void adminAddMovie(const char *moviesFile) {
+    loadMovies(moviesFile);
+    Movie m;
+    int nextID = 1;
+    for (int i = 0; i < movieCount; i++) {
+        if (movies[i].id >= nextID) nextID = movies[i].id + 1;
+    }
+    m.id = nextID;
+
+    printf("Enter movie title: ");
+    if (!fgets(m.title, sizeof(m.title), stdin)) {
+		printf("Input error\n");
+		return;
+	}
+    trimNewline(m.title); trimSpaces(m.title);
+
+    if (!titleIsValid(m.title)) { printf("Invalid title (empty or numeric-only). Aborted.\n"); return; }
+
+    printf("Enter showtimes (comma separated, e.g. 12:00,15:00): ");
+    char sline[512];
+    if (!fgets(sline, sizeof(sline), stdin)) {
+		printf("Input error\n");
+		return;
+	}
+    trimNewline(sline); trimSpaces(sline);
+
+    if (strlen(sline) == 0) {
+		printf("No showtimes provided. Aborted.\n");
+		return;
+	}
+
+    char temp[512];
+    strncpy(temp, sline, sizeof(temp) - 1);
+    temp[sizeof(temp) - 1] = '\0';
+    m.showCount = 0;
+    char *tok = strtok(temp, ",");
+    while (tok && m.showCount < MAX_SHOWS) {
+        trimSpaces(tok);
+        if (!validShowtimeFormat(tok)) {
+			printf("Invalid showtime format: %s. Aborted.\n", tok);
+			return;
+		}
+        strncpy(m.showtimes[m.showCount], tok, 15); m.showtimes[m.showCount][15] = '\0';
+        m.showCount++;
+        tok = strtok(NULL, ",");
+    }
+    if (m.showCount == 0) { printf("No valid showtimes. Aborted.\n"); return; }
+
+    printf("Enter price (numeric, >0): ");
+    if (scanf("%d", &m.price) != 1) { flushStdin(); printf("Invalid price input. Aborted.\n"); return; }
+    flushStdin();
+    if (m.price <= 0) { printf("Price must be > 0. Aborted.\n"); return; }
+
+    FILE *fw = fopen(moviesFile, "a");
+    if (!fw) { printf("Cannot open movies file to append.\n"); return; }
+    char showbuf[512] = "";
+    for (int i = 0; i < m.showCount; i++) {
+        if (i) strcat(showbuf, ",");
+        strcat(showbuf, m.showtimes[i]);
+    }
+    fprintf(fw, "%d|%s|%s|%d\n", m.id, m.title, showbuf, m.price);
+    fclose(fw);
+
+    for (int i = 0; i < m.showCount; i++) ensureSeatFile(m.id, i);
+
+    printf("Movie added with ID %d\n", m.id);
+}
+
+void bookingFlow(const char *moviesFile, const char *fnbFile) {
+    loadMovies(moviesFile);
+    if (movieCount == 0) {
+		printf("No movies available.\n");
+		pauseConsole();
+		return;
+	}
+
     printf("\n=== Movies ===\n");
-    for (int i = 0; i < movieCount; ++i) {
+    for (int i = 0; i < movieCount; i++) {
         printf("ID:%d | %s | Rp %d | Shows: ", movies[i].id, movies[i].title, movies[i].price);
-        for (int j = 0; j < movies[i].showCount; ++j) {
-            printf("%s", movies[i].showTimes[j]);
-            if (j < movies[i].showCount - 1) printf(", ");
+        for (int j = 0; j < movies[i].showCount; j++) {
+            printf("%s", movies[i].showtimes[j]);
+            if (j < movies[i].showCount-1) printf(", ");
         }
         printf("\n");
     }
-}
-
-int findMovieIndexById(int id) {
-    for (int i = 0; i < movieCount; ++i) {
-        if (movies[i].id == id) return i;
+    printf("Enter movie ID to book: ");
+    int mid;
+    if (scanf("%d", &mid) != 1) {
+		flushStdin();
+		printf("Invalid\n");
+		return;
+	}
+    flushStdin();
+    int idx = -1;
+    for (int i = 0; i < movieCount; i++) {
+        if (movies[i].id == mid) {
+			idx = i;
+			break;
+		}
     }
-    return -1;
-}
-
-int selectMovieById(void) {
-    loadMovies();
-    if (movieCount == 0) {
-        printf("No movies available.\n");
-        pauseScreen();
-        return -1;
-    }
-    listMovies();
-    printf("\nEnter movie ID to book (0 to cancel): ");
-    int id;
-    if (scanf("%d", &id) != 1) { clearInput(); printf("Invalid input.\n"); pauseScreen(); return -1; }
-    clearInput();
-    if (id == 0) return -1;
-    int idx = findMovieIndexById(id);
     if (idx == -1) {
-        printf("Movie with ID %d not found.\n", id);
-        pauseScreen();
-        return -1;
-    }
-    return idx;
-}
-
-int selectShowtimeForMovie(const Movie *m) {
-    if (!m) return -1;
+		printf("Movie not found\n");
+		pauseConsole();
+		return;
+	}
+    Movie *m = &movies[idx];
     if (m->showCount == 0) {
-        printf("No showtimes for this movie.\n");
-        pauseScreen();
-        return -1;
+        printf("No showtimes\n");
+        pauseConsole();
+        return;
     }
-    printf("Select showtime for '%s':\n", m->title);
-    for (int i = 0; i < m->showCount; ++i) {
-        printf("%d) %s\n", i + 1, m->showTimes[i]);
-    }
-    printf("Choose (1-%d, 0 cancel): ", m->showCount);
-    int choice;
-    if (scanf("%d", &choice) != 1) { clearInput(); printf("Invalid input.\n"); pauseScreen(); return -1; }
-    clearInput();
-    if (choice == 0) return -1;
-    if (choice < 1 || choice > m->showCount) {
-        printf("Invalid show selection.\n");
-        pauseScreen();
-        return -1;
-    }
-    return choice - 1;
-}
 
-int selectTicketQuantity(int available) {
-    if (available <= 0) {
-        printf("No seats available.\n");
-        pauseScreen();
-        return -1;
+    printf("Select showtime:\n");
+    for (int i = 0; i < m->showCount; i++) {
+        printf("%d. %s\n", i+1, m->showtimes[i]);
     }
-    printf("How many tickets to buy? (available %d, 0 to cancel): ", available);
-    int qty;
-    if (scanf("%d", &qty) != 1) { clearInput(); printf("Invalid input.\n"); pauseScreen(); return -1; }
-    clearInput();
-    if (qty == 0) return -1;
-    if (qty < 1 || qty > available) {
-        printf("Invalid quantity (must be 1..%d)\n", available);
-        pauseScreen();
-        return -1;
-    }
-    return qty;
-}
+    printf("Choose (1-%d): ", m->showCount);
+    int schoice;
+    if (scanf("%d", &schoice) != 1) {
+		flushStdin();
+		printf("Invalid\n");
+		return;
+	}
+    flushStdin();
+    if (schoice < 1 || schoice > m->showCount) {
+		printf("Invalid showtime\n");
+		pauseConsole();
+		return;
+	}
+    int showIndex = schoice - 1;
+    char chosenShow[16];
+    strncpy(chosenShow, m->showtimes[showIndex], 15); chosenShow[15] = '\0';
 
-int parseSeatCode(const char *code, int *outRow, int *outCol) {
-    if (!code || strlen(code) < 2) return 0;
-    char c = toupper((unsigned char)code[0]);
-    if (c < 'A' || c >= 'A' + BARIS) return 0;
-    int row = c - 'A';
-    const char *p = code + 1;
-    if (!isdigit((unsigned char)*p)) return 0;
-    int col = atoi(p) - 1;
-    if (col < 0 || col >= KOLOM) return 0;
-    *outRow = row;
-    *outCol = col;
-    return 1;
-}
-
-int selectSeatsInteractive(const Movie *m, int showIndex, int qty, char chosenSeats[][8]) {
-    if (!m) return 0;
-    int seatsArr[BARIS][KOLOM];
+    int seats[SEAT_ROWS][SEAT_COLS];
     ensureSeatFile(m->id, showIndex);
-    loadSeats(m->id, showIndex, seatsArr);
+    loadSeats(m->id, showIndex, seats);
+
+    printf("How many tickets to buy? ");
+    int qty;
+    if (scanf("%d", &qty) != 1) {
+		flushStdin();
+		printf("Invalid\n");
+		return;
+	}
+    flushStdin();
+    if (qty <= 0) {
+		printf("Invalid qty\n");
+		pauseConsole();
+		return;
+	}
 
     int avail = 0;
-    for (int r = 0; r < BARIS; ++r) for (int c = 0; c < KOLOM; ++c) if (seatsArr[r][c] == 0) avail++;
+    for (int r = 0; r < SEAT_ROWS; r++) {
+        for (int c = 0; c < SEAT_COLS; c++) {
+            if (seats[r][c] == 0) avail++;
+        }
+    }
     if (qty > avail) {
         printf("Not enough seats available (%d left)\n", avail);
-        pauseScreen();
-        return 0;
+        pauseConsole();
+        return;
     }
-
-    int chosenCount = 0;
-    while (chosenCount < qty) {
-        clearScreen();
-        printf("Movie: %s | Showtime: %s\n", m->title, m->showTimes[showIndex]);
-        printf("Select seats (%d remaining):\n", qty - chosenCount);
-        displaySeatGrid(seatsArr);
-        printf("Enter seat code (e.g. B7) or 0 to cancel: ");
-        char input[32];
-        readLine(input, sizeof(input));
-        if (strcmp(input, "0") == 0) {
-            for (int i = 0; i < chosenCount; ++i) {
-                int rr = chosenSeats[i][0] - 'A';
-                int cc = atoi(chosenSeats[i] + 1) - 1;
-                if (rr >= 0 && rr < BARIS && cc >= 0 && cc < KOLOM) seatsArr[rr][cc] = 0;
-            }
-            printf("Seat selection cancelled.\n");
-            pauseScreen();
-            return 0;
-        }
-        int row, col;
-        if (!parseSeatCode(input, &row, &col)) {
-            printf("Invalid seat code. Use format like A1..%c%d\n", 'A' + BARIS - 1, KOLOM);
-            pauseScreen();
-            continue;
-        }
-        if (seatsArr[row][col] == 1) {
-            printf("Seat %c%d already occupied. Choose another.\n", 'A' + row, col + 1);
-            pauseScreen();
-            continue;
-        }
-        seatsArr[row][col] = 1;
-        snprintf(chosenSeats[chosenCount], 8, "%c%d", 'A' + row, col + 1);
-        chosenCount++;
-        printf("Seat %c%d reserved temporarily.\n", 'A' + row, col + 1);
-        pauseScreen();
-    }
-
-    if (saveSeats(m->id, showIndex, seatsArr) != 0) {
-        printf("Warning: failed to persist seat reservations.\n");
-        pauseScreen();
-    }
-    return 1;
-}
-
-int processPayment(int ticketSubtotal, char *payMethod, int payMethodSize) {
-    if (!payMethod || payMethodSize <= 0) return 0;
-    printf("\n=== Payment Summary (Ticket) ===\n");
-    printf("Total to pay: Rp %d\n", ticketSubtotal);
-    printf("Choose payment method: 1. Cash  2. Card\nChoice: ");
-    int payChoice = 1;
-    if (scanf("%d", &payChoice) != 1) { clearInput(); payChoice = 1; }
-    clearInput();
-    if (payChoice == 2) {
-        strncpy(payMethod, "Card", payMethodSize - 1);
-        payMethod[payMethodSize - 1] = '\0';
-        char card[64];
-        printf("Enter card number (simulated): ");
-        readLine(card, sizeof(card));
-    } else {
-        strncpy(payMethod, "Cash", payMethodSize - 1);
-        payMethod[payMethodSize - 1] = '\0';
-    }
-    printf("Payment processed (%s).\n", payMethod);
-    pauseScreen();
-    return 1;
-}
-
-void appendTransaction(const char *record) {
-    FILE *f = fopen("transactions.txt", "a");
-    if (!f) return;
-    fprintf(f, "%s\n", record);
-    fclose(f);
-}
-
-void logTransaction(const char *username, const Movie *m, const char *showtime, char chosenSeats[][8], int chosenCount, int ticketTotal, const char *payMethod) {
-    FILE *tf = fopen("transactions.txt", "a");
-    if (!tf) return;
-    time_t t = time(NULL);
-    struct tm tm = *localtime(&t);
-    char timestr[64];
-    snprintf(timestr, sizeof(timestr), "%04d-%02d-%02d %02d:%02d:%02d",
-             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-    fprintf(tf, "[%s] user:%s | movie:%s | show:%s | seats:", timestr,
-            (username && username[0]) ? username : "guest", m->title, showtime);
-    for (int i = 0; i < chosenCount; ++i) {
-        if (i) fprintf(tf, ",");
-        fprintf(tf, "%s", chosenSeats[i]);
-    }
-    fprintf(tf, " | ticket:%d | ticket_total:%d | payment:%s\n", chosenCount, ticketTotal, payMethod);
-    fclose(tf);
-}
-
-void bookingFlow(void) {
-    loadMovies();
-    int mIndex = selectMovieById();
-    if (mIndex == -1) return;
-    Movie *m = &movies[mIndex];
-
-    int showIndex = selectShowtimeForMovie(m);
-    if (showIndex == -1) return;
-    const char *chosenShow = m->showTimes[showIndex];
-
-    int seatsArr[BARIS][KOLOM];
-    ensureSeatFile(m->id, showIndex);
-    loadSeats(m->id, showIndex, seatsArr);
-    int avail = 0;
-    for (int r = 0; r < BARIS; ++r) for (int c = 0; c < KOLOM; ++c) if (seatsArr[r][c] == 0) avail++;
-    if (avail == 0) { printf("No seats available for this show.\n"); pauseScreen(); return; }
-
-    int qty = selectTicketQuantity(avail);
-    if (qty == -1) return;
 
     char chosenSeats[200][8];
-    if (!selectSeatsInteractive(m, showIndex, qty, chosenSeats)) {
-        return;
+    int chosenCount = 0;
+
+    while (chosenCount < qty) {
+        clearScreen();
+        printf("Movie: %s | Showtime: %s\n", m->title, chosenShow);
+        printf("Select seats (%d remaining):\n", qty - chosenCount);
+        displaySeatGrid(seats);
+        printf("Enter seat code (e.g. B7): ");
+        char input[32];
+        if (!fgets(input, sizeof(input), stdin)) continue;
+        trimNewline(input); trimSpaces(input);
+        if (strlen(input) < 2) {
+            printf("Invalid input\n");
+            pauseConsole();
+            continue;
+        }
+        char rowc = toupper(input[0]);
+        if (rowc < 'A' || rowc > 'A' + SEAT_ROWS - 1) {
+			printf("Row out of range\n");
+			pauseConsole();
+			continue;
+		}
+        int row = rowc - 'A';
+        int col = atoi(input+1) - 1;
+        if (col < 0 || col >= SEAT_COLS) {
+			printf("Column out of range\n");
+			pauseConsole();
+			continue;
+		}
+        if (seats[row][col] == 1) {
+			printf("Seat %c%d already occupied\n", rowc, col+1);
+			pauseConsole();
+			continue;
+		}
+        seats[row][col] = 1;
+        sprintf(chosenSeats[chosenCount], "%c%d", rowc, col+1);
+        chosenCount++;
+        printf("Seat %c%d reserved temporarily.\n", rowc, col+1);
+        pauseConsole();
     }
 
-    int ticketSubtotal = qty * m->price;
+    int ticketSubtotal = chosenCount * m->price;
+    printf("\n=== Payment Summary (Ticket) ===\n");
+    printf("Movie: %s\nShowtime: %s\n", m->title, chosenShow);
+    printf("Seats: ");
+    for (int i = 0; i < chosenCount; i++) {
+        if (i) printf(", ");
+        printf("%s", chosenSeats[i]);
+    }
+    printf("\nTicket price each: Rp %d\nTicket subtotal: Rp %d\n", m->price, ticketSubtotal);
+    printf("\nPress ENTER to continue to payment method...");
+    flushStdin();
+    getchar();
 
+    printf("\nChoose payment method: 1. Cash  2. Card\nChoice: ");
+    int payChoice = 1;
+    if (scanf("%d", &payChoice) != 1) {
+		flushStdin();
+		payChoice = 1;
+	}
+    flushStdin();
     char payMethod[64] = "Cash";
-    if (!processPayment(ticketSubtotal, payMethod, sizeof(payMethod))) {
-        printf("Payment failed.\n");
-        pauseScreen();
-        return;
+    if (payChoice == 2) {
+        strcpy(payMethod, "Card");
+        char card[64];
+        printf("Enter card number (simulated): ");
+        if (fgets(card, sizeof(card), stdin)) {
+            trimNewline(card);
+			trimSpaces(card);
+        }
     }
 
-    loadSeats(m->id, showIndex, seatsArr);
-    if (saveSeats(m->id, showIndex, seatsArr) != 0) {
-        printf("Warning: failed to save seats file.\n");
-    }
-
-    logTransaction((currentUser >= 0) ? users[currentUser].username : "guest", m, chosenShow, chosenSeats, qty, ticketSubtotal, payMethod);
+    printf("\n=== Payment Successful ===\n");
+    printf("Ticket subtotal: Rp %d\nPayment method: %s\n", ticketSubtotal, payMethod);
+    printf("\nPress ENTER to proceed to F&B ordering (optional)...");
+    getchar();
 
     clearScreen();
-    printf("===== FINAL SUMMARY =====\n");
-    printf("Name        : %s\n", (currentUser >= 0) ? users[currentUser].fullname : "Guest");
+
+    loadFnbs(fnbFile);
+    char orderedNames[100][128];
+    int qtys[100], prices[100];
+    int ordCount = 0;
+
+    if (fnbCount == 0) {
+        printf("No F&B menu available. Press ENTER to see final summary...");
+        getchar();
+    } else {
+        while (1) {
+            clearScreen();
+            printf("=== F&B Menu ===\n");
+            for (int i = 0; i < fnbCount; i++) {
+            	printf("%d. %s - Rp %d\n", fnbs[i].id, fnbs[i].name, fnbs[i].price);
+			}
+            printf("\nYour current F&B order (%d items):\n", ordCount);
+            if (ordCount == 0) {
+                printf("  (none)\n");
+            } else {
+                for (int i = 0; i < ordCount; i++) {
+                    printf("  %d) %s x%d = Rp %d\n", i+1, orderedNames[i], qtys[i], qtys[i]*prices[i]);
+                }
+            }
+            printf("\nOptions:\n");
+            printf("1. Add Item\n");
+            printf("2. Review/Edit Current Order\n");
+            printf("0. Done / Finish F&B ordering\n");
+            printf("Enter choice: ");
+            int menuChoice;
+            if (scanf("%d", &menuChoice) != 1) { flushStdin(); printf("Invalid\n"); pauseConsole(); continue; }
+            flushStdin();
+            if (menuChoice == 0) break;
+            else if (menuChoice == 1) {
+                printf("Enter item ID (as shown above): ");
+                int id;
+                if (scanf("%d", &id) != 1) { flushStdin(); printf("Invalid\n"); pauseConsole(); continue; }
+                flushStdin();
+                int find = -1;
+                for (int i = 0; i < fnbCount; i++) {
+                    if (fnbs[i].id == id) { find = i; break; }
+                }
+                if (find == -1) { printf("Item not found\n"); pauseConsole(); continue; }
+                printf("Quantity: ");
+                int q;
+                if (scanf("%d", &q) != 1) { flushStdin(); printf("Invalid\n"); pauseConsole(); continue; }
+                flushStdin();
+                if (q <= 0) { printf("Invalid qty\n"); pauseConsole(); continue; }
+                if (ordCount < 100) {
+                    strncpy(orderedNames[ordCount], fnbs[find].name, 127);
+                    qtys[ordCount] = q;
+                    prices[ordCount] = fnbs[find].price;
+                    ordCount++;
+                    printf("Added %s x%d\n", fnbs[find].name, q);
+                } else {
+                    printf("Order list full\n");
+                }
+                printf("Press ENTER to continue ordering...");
+                getchar();
+            } else if (menuChoice == 2) {
+                if (ordCount == 0) {
+					printf("No items to edit. Press ENTER...");
+					getchar();
+					continue;
+				}
+                while (1) {
+                    clearScreen();
+                    printf("=== Review / Edit Order ===\n");
+                    for (int i = 0; i < ordCount; i++) {
+                        printf("%d) %s x%d = Rp %d\n", i+1, orderedNames[i], qtys[i], qtys[i]*prices[i]);
+                    }
+                    printf("0) Back to F&B menu\n");
+                    printf("Select item number to edit (0 back): ");
+                    int sel;
+                    if (scanf("%d", &sel) != 1) {
+						flushStdin();
+						printf("Invalid\n");
+						pauseConsole();
+						continue;
+					}
+                    flushStdin();
+                    if (sel == 0) break;
+                    if (sel < 1 || sel > ordCount) {
+						printf("Invalid selection\n");
+						pauseConsole();
+						continue;
+					}
+                    int idxItem = sel - 1;
+                    
+                    while (1) {
+                        clearScreen();
+                        printf("Editing: %s x%d = Rp %d\n", orderedNames[idxItem], qtys[idxItem], qtys[idxItem]*prices[idxItem]);
+                        printf("1. Change quantity\n");
+                        printf("2. Replace with another F&B item\n");
+                        printf("3. Delete this item\n");
+                        printf("0. Back\n");
+                        printf("Choose action: ");
+                        int act;
+                        if (scanf("%d", &act) != 1) {
+							flushStdin();
+							printf("Invalid\n");
+							pauseConsole();
+							continue;
+						}
+                        flushStdin();
+                        if (act == 0) break;
+                        else if (act == 1) {
+                            printf("Enter new quantity (0 to delete): ");
+                            int nq;
+                            if (scanf("%d", &nq) != 1) {
+								flushStdin();
+								printf("Invalid\n");
+								pauseConsole();
+								continue;
+							}
+                            flushStdin();
+                            if (nq < 0) {
+								printf("Invalid qty\n");
+								pauseConsole();
+								continue;
+							}
+                            if (nq == 0) {
+                                for (int k = idxItem; k < ordCount - 1; k++) {
+                                    strcpy(orderedNames[k], orderedNames[k+1]);
+                                    qtys[k] = qtys[k+1];
+                                    prices[k] = prices[k+1];
+                                }
+                                ordCount--;
+                                printf("Item deleted.\n");
+                                pauseConsole();
+                                break;
+                            } else {
+                                qtys[idxItem] = nq;
+                                printf("Quantity updated.\n");
+                                pauseConsole();
+                            }
+                        } else if (act == 2) {
+                            clearScreen();
+                            printf("F&B Items available:\n");
+                            for (int i = 0; i < fnbCount; i++) {
+                            	printf("%d. %s - Rp %d\n", fnbs[i].id, fnbs[i].name, fnbs[i].price);
+							}
+                            printf("Enter new item ID to replace with: ");
+                            int newid;
+                            if (scanf("%d", &newid) != 1) {
+								flushStdin();
+								printf("Invalid\n");
+								pauseConsole();
+								continue;
+							}
+                            flushStdin();
+                            int find2 = -1;
+                            for (int i = 0; i < fnbCount; i++) {
+                            	if (fnbs[i].id == newid) {
+									find2 = i;
+									break;
+								}
+							}
+                            if (find2 == -1) {
+								printf("Item not found\n");
+								pauseConsole();
+								continue;
+							}
+                            strncpy(orderedNames[idxItem], fnbs[find2].name, 127);
+                            prices[idxItem] = fnbs[find2].price;
+                            printf("Item replaced.\n");
+                            pauseConsole();
+                        } else if (act == 3) {
+                            for (int k = idxItem; k < ordCount - 1; k++) {
+                                strcpy(orderedNames[k], orderedNames[k+1]);
+                                qtys[k] = qtys[k+1];
+                                prices[k] = prices[k+1];
+                            }
+                            ordCount--;
+                            printf("Item deleted.\n");
+                            pauseConsole();
+                            break;
+                        } else {
+                            printf("Invalid action\n"); pauseConsole();
+                        }
+                    }
+                }
+            } else {
+                printf("Invalid option\n"); pauseConsole();
+            }
+        }
+    }
+
+    OrderItem items[100];
+    for (int i = 0; i < ordCount; i++) {
+        strncpy(items[i].name, orderedNames[i], sizeof(items[i].name)-1);
+        items[i].name[sizeof(items[i].name)-1] = '\0';
+        items[i].qty = qtys[i];
+        items[i].price = prices[i];
+    }
+
+    printFnbReceipt(items, ordCount);
+
+    printf("\nPress ENTER to continue to final summary...");
+    getchar();
+
+    int fnbSubtotal = 0;
+    for (int i = 0; i < ordCount; i++) fnbSubtotal += qtys[i] * prices[i];
+    int grandTotal = ticketSubtotal + fnbSubtotal;
+
+    clearScreen();
+    printf("\n===== FINAL SUMMARY =====\n");
+    printf("Name        : %s\n", sessionFullname[0] ? sessionFullname : "Guest");
     printf("Movie       : %s\n", m->title);
     printf("Showtime    : %s\n", chosenShow);
     printf("Seats       : ");
-    for (int i = 0; i < qty; ++i) { if (i) printf(", "); printf("%s", chosenSeats[i]); }
-    printf("\nTicket price: Rp %d\nTicket qty   : %d\nTicket total : Rp %d\n", m->price, qty, ticketSubtotal);
+    for (int i = 0; i < chosenCount; i++) {
+		if (i) printf(", ");
+		printf("%s", chosenSeats[i]);
+	}
+    printf("\nTicket price: Rp %d\nTicket qty  : %d\nTicket total: Rp %d\n", m->price, chosenCount, ticketSubtotal);
+    if (ordCount > 0) {
+        printf("\nF&B Items (unsorted in summary view):\n");
+        for (int i = 0; i < ordCount; i++) {
+        	printf("- %s x%d = Rp %d\n", orderedNames[i], qtys[i], qtys[i]*prices[i]);
+		}
+    } else {
+        printf("\nNo F&B ordered.\n");
+    }
+    printf("\nGrand Total : Rp %d\n", grandTotal);
     printf("Payment method: %s\n", payMethod);
-    printf("\nThank you for booking with Cnema!\n");
-    pauseScreen();
+    printf("\nThank you for booking with \"C\"nema!\n");
+    printf("================================\n");
+
+    if (saveSeats(m->id, showIndex, seats) != 0) printf("Warning: failed to save seats file.\n");
+
+    {
+        FILE *tf = fopen("transactions.txt", "a");
+        if (tf) {
+            time_t t = time(NULL);
+            struct tm tm = *localtime(&t);
+            char timestr[64];
+            sprintf(timestr, "%04d-%02d-%02d %02d:%02d:%02d",
+                    tm.tm_year+1900, tm.tm_mon+1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+            fprintf(tf, "[%s] user:%s | movie:%s | show:%s | seats:", timestr,
+                    sessionUsername[0] ? sessionUsername : "guest", m->title, chosenShow);
+            for (int i = 0; i < chosenCount; i++) {
+                if (i) fprintf(tf, ",");
+                fprintf(tf, "%s", chosenSeats[i]);
+            }
+            fprintf(tf, " | ticket:%d | ticket_total:%d | fnb_total:%d | grand_total:%d | payment:%s\n",
+                    chosenCount, ticketSubtotal, fnbSubtotal, grandTotal, payMethod);
+
+            if (ordCount > 0) {
+                OrderItem *copy = malloc(sizeof(OrderItem) * ordCount);
+                if (copy) {
+                    for (int i = 0; i < ordCount; i++) copy[i] = items[i];
+                    qsort(copy, ordCount, sizeof(OrderItem), orderItemCmp);
+                    fprintf(tf, "    FNB items (sorted): ");
+                    for (int i = 0; i < ordCount; i++) {
+                        fprintf(tf, "%s x%d", copy[i].name, copy[i].qty);
+                        if (i < ordCount-1) fprintf(tf, "; ");
+                    }
+                    fprintf(tf, "\n");
+                    free(copy);
+                } else {
+                    fprintf(tf, "    FNB items: ");
+                    for (int i = 0; i < ordCount; i++) {
+                        fprintf(tf, "%s x%d", items[i].name, items[i].qty);
+                        if (i < ordCount-1) fprintf(tf, "; ");
+                    }
+                    fprintf(tf, "\n");
+                }
+            }
+            fclose(tf);
+        } else {
+            printf("Warning: cannot open transactions.txt to append.\n");
+        }
+    }
+    printf("\nPress ENTER to return to main menu...");
+    getchar();
 }
 
-void registerPage(void) {
-    clearScreen();
-    printf("=-=-= Register Account =-=-=\n");
-    User acc;
-    char p1[100], p2[100];
+int loginRegisterFlow(const char *usersFile) {
+    loadUsersFromFile(usersFile);
 
     while (1) {
-        printf("Full Name: ");
-        readLine(acc.fullname, sizeof(acc.fullname));
-        if (strlen(acc.fullname) == 0) {
-            printf("Full name cannot be empty.\n");
-            continue;
-        }
-        break;
-    }
-
-    while (1) {
-        printf("Email (@gmail.com): ");
-        readLine(acc.username, sizeof(acc.username));
-        if (!isValidEmail(acc.username)) {
-            printf("Email must end with @gmail.com and be valid.\n");
-            continue;
-        }
-        int exists = 0;
-        for (int i = 0; i < userCount; ++i) {
-            if (strcmp(acc.username, users[i].username) == 0) { exists = 1; break; }
-        }
-        if (exists) {
-            printf("Username already used. Try another.\n");
-            continue;
-        }
-        break;
-    }
-
-    while (1) {
-        printf("Password: ");
-        getPasswordMasked(p1, sizeof(p1));
-        printf("Confirm password: ");
-        getPasswordMasked(p2, sizeof(p2));
-        if (strcmp(p1, p2) != 0) {
-            printf("Passwords do not match. Try again.\n");
-            continue;
-        }
-        if (strlen(p1) == 0) {
-            printf("Password cannot be empty.\n");
-            continue;
-        }
-        strncpy(acc.password, p1, sizeof(acc.password) - 1);
-        acc.password[sizeof(acc.password) - 1] = '\0';
-        break;
-    }
-
-    saveUser(acc);
-    loadUsers();
-
-    printf("\nAccount created successfully!\n");
-    pauseScreen();
-}
-
-int loginPage(void) {
-    clearScreen();
-    printf("=-=-= Login =-=-=\n");
-    char username[100], password[100];
-
-    printf("Username (@gmail.com): ");
-    readLine(username, sizeof(username));
-
-    printf("Password: ");
-    getPasswordMasked(password, sizeof(password));
-
-    for (int i = 0; i < userCount; ++i) {
-        if (strcmp(username, users[i].username) == 0 && strcmp(password, users[i].password) == 0) {
-            printf("\nLogin Successful! Welcome, %s\n", users[i].fullname);
-            currentUser = i;
-            pauseScreen();
-            return 1;
-        }
-    }
-
-    printf("\nInvalid username or password.\n");
-    pauseScreen();
-    return 0;
-}
-
-void userMenu(void) {
-    while (currentUser >= 0) {
         clearScreen();
-        printf("=== USER MENU ===\n");
-        printf("Logged in as: %s (%s)\n", users[currentUser].fullname, users[currentUser].username);
-        printf("1. List Movies\n");
-        printf("2. Book Ticket\n");
-        printf("3. Logout\n");
-        printf("Choice: ");
+        printf("=== Welcome to \"C\"nema ===\n");
+        printf("1. Login\n2. Register\n3. Exit\nChoice: ");
         int ch;
         if (scanf("%d", &ch) != 1) {
-            clearInput();
-            continue;
-        }
-        clearInput();
+			flushStdin();
+			continue;
+		}
+        flushStdin();
         if (ch == 1) {
-            loadMovies();
-            listMovies();
-            pauseScreen();
+            char uname[128], pass[128];
+            printf("Username (email or 'admin'): ");
+            if (!fgets(uname, sizeof(uname), stdin)) continue;
+            trimNewline(uname); trimSpaces(uname);
+            printf("Password: ");
+            getPasswordMasked(pass, sizeof(pass)); trimNewline(pass); trimSpaces(pass);
+
+            if ((strcmp(uname, "admin") == 0 || strcmp(uname, "admin@gmail.com") == 0) && strcmp(pass, "admin1234") == 0) {
+                strcpy(sessionUsername, "admin");
+                strcpy(sessionFullname, "Administrator");
+                sessionIsAdmin = 1;
+                return 1;
+            }
+
+            loadUsersFromFile(usersFile);
+            int found = 0;
+            for (int i = 0; i < userCount; i++) {
+                if (strcmp(users[i].username, uname) == 0 && strcmp(users[i].password, pass) == 0) {
+                    strcpy(sessionUsername, users[i].username);
+                    strcpy(sessionFullname, users[i].fullname);
+                    sessionIsAdmin = 0;
+                    found = 1; break;
+                }
+            }
+            if (found) return 1;
+            printf("Invalid username or password. Press ENTER to continue...");
+            getchar();
         } else if (ch == 2) {
-            bookingFlow();
+            char fullname[128], uname[128], p1[128], p2[128];
+            printf("Full name: ");
+            if (!fgets(fullname, sizeof(fullname), stdin)) continue;
+            trimNewline(fullname); trimSpaces(fullname);
+            while (1) {
+                printf("Username (must end with @gmail.com): ");
+                if (!fgets(uname, sizeof(uname), stdin)) break;
+                trimNewline(uname); trimSpaces(uname);
+                int L = (int)strlen(uname);
+                if (L <= 10 || strcmp(uname + L - 10, "@gmail.com") != 0) {
+					printf("Must end with @gmail.com\n");
+					continue;
+				}
+
+                loadUsersFromFile(usersFile);
+                int exists = 0;
+                for (int i = 0; i < userCount; i++) if (strcmp(users[i].username, uname) == 0) {
+					exists = 1;
+					break;
+				}
+                if (exists) {
+					printf("Username already used\n");
+					continue;
+				}
+                break;
+            }
+            while (1) {
+                printf("Password: ");
+                getPasswordMasked(p1, sizeof(p1)); trimNewline(p1); trimSpaces(p1);
+                printf("Confirm password: ");
+                getPasswordMasked(p2, sizeof(p2)); trimNewline(p2); trimSpaces(p2);
+                if (strcmp(p1, p2) != 0) {
+					printf("Passwords do not match\n");
+					continue;
+				}
+                break;
+            }
+
+            if (!saveUserToFile(usersFile, uname, p1, fullname)) {
+                printf("Failed to save user to file. Press ENTER...");
+                getchar();
+            } else {
+                loadUsersFromFile(usersFile);
+                printf("Registration successful. You may now login. Press ENTER...");
+                getchar();
+            }
         } else if (ch == 3) {
-            currentUser = -1;
-            printf("Logged out.\n");
-            pauseScreen();
+            return 0;
+        } else {
+            printf("Invalid choice\n"); pauseConsole();
+        }
+    }
+}
+
+void adminMenu(const char *moviesFile, const char *fnbFile, const char *usersFile) {
+    while (1) {
+        clearScreen();
+        printf("=== ADMIN MENU ===\n");
+        printf("1. Add Movie\n2. View Movies\n3. View F&B\n4. Logout\nChoice: ");
+        int ch;
+        if (scanf("%d", &ch) != 1) {
+			flushStdin();
+			continue;
+		}
+        flushStdin();
+        if (ch == 1) {
+            adminAddMovie(moviesFile);
+            pauseConsole();
+        } else if (ch == 2) {
+            loadMovies(moviesFile);
+            printf("\n=== Movies ===\n");
+            for (int i = 0; i < movieCount; i++) {
+                printf("ID:%d | %s | Rp %d | Shows: ", movies[i].id, movies[i].title, movies[i].price);
+                for (int j = 0; j < movies[i].showCount; j++) {
+                    printf("%s", movies[i].showtimes[j]);
+                    if (j < movies[i].showCount-1) printf(", ");
+                }
+                printf("\n");
+            }
+            pauseConsole();
+        } else if (ch == 3) {
+            loadFnbs(fnbFile);
+            printf("\n=== F&B ===\n");
+            for (int i = 0; i < fnbCount; i++) printf("%d. %s - Rp %d\n", fnbs[i].id, fnbs[i].name, fnbs[i].price);
+            pauseConsole();
+        } else if (ch == 4) {
+            strcpy(sessionUsername, "");
+			strcpy(sessionFullname, "");
+			sessionIsAdmin = 0;
             break;
         } else {
-            printf("Invalid choice.\n");
-            pauseScreen();
+            printf("Invalid\n"); pauseConsole();
         }
     }
 }
 
 int main(void) {
-    ensureAdminUser();
-    loadUsers();
-    loadMovies();
+    const char *moviesFile = "movies.txt";
+    const char *fnbFile = "fnb.txt";
+    const char *usersFile = "users.txt";
 
-    while (1) {
-        clearScreen();
-        printf("=-=-= Welcome to Cnema! =-=-=\n");
-        printf("1. Login\n");
-        printf("2. Register\n");
-        printf("3. Exit\n");
-        printf("Choice: ");
+    FILE *tf = fopen("transactions.txt", "a");
+    if (tf) fclose(tf);
 
-        int n;
-        if (scanf("%d", &n) != 1) {
-            clearInput();
-            continue;
+    FILE *uf = fopen(usersFile, "r");
+    int hasAdmin = 0;
+    if (uf) {
+        char line[MAX_LINE];
+        while (fgets(line, sizeof(line), uf)) {
+            if (strstr(line, "admin|") != NULL) {
+				hasAdmin = 1;
+				break;
+			}
         }
-        clearInput();
-
-        if (n == 1) {
-            if (loginPage()) {
-                userMenu();
-            }
-        } else if (n == 2) {
-            registerPage();
-        } else if (n == 3) {
-            printf("Goodbye!\n");
-            break;
-        } else {
-            printf("Invalid.\n");
-            pauseScreen();
+        fclose(uf);
+    }
+    if (!hasAdmin) {
+        FILE *wf = fopen(usersFile, "a");
+        if (wf) {
+            fprintf(wf, "admin|admin1234|Administrator\n");
+            fclose(wf);
         }
     }
+    loadUsersFromFile(usersFile);
+
+    while (1) {
+        if (!loginRegisterFlow(usersFile)) break;
+        if (sessionIsAdmin) {
+            adminMenu(moviesFile, fnbFile, usersFile);
+        } else {
+            while (1) {
+                clearScreen();
+                printf("=== USER MENU ===\n");
+                printf("Logged in as: %s (%s)\n", sessionFullname, sessionUsername);
+                printf("1. Book Ticket\n2. Logout\nChoice: ");
+                int ch;
+                if (scanf("%d", &ch) != 1) {
+					flushStdin();
+					continue;
+				}
+                flushStdin();
+                if (ch == 1) {
+                    bookingFlow(moviesFile, fnbFile);
+                } else if (ch == 2) {
+                    strcpy(sessionUsername, "");
+					strcpy(sessionFullname, "");
+					sessionIsAdmin = 0;
+                    break;
+                } else {
+                    printf("Invalid\n");
+					pauseConsole();
+                }
+            }
+        }
+    }
+    printf("Goodbye!\n");
     return 0;
 }
